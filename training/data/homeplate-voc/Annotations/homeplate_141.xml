@@ -1,0 +1,33 @@
+<annotation>
+  <folder>homeplate</folder>
+  <filename>homeplate_141.jpg</filename>
+  <source>
+    <database>Unknown</database>
+    <annotation>Unknown</annotation>
+    <image>Unknown</image>
+  </source>
+  <size>
+    <width>667</width>
+    <height>500</height>
+    <depth></depth>
+  </size>
+  <segmented>0</segmented>
+  <object>
+    <name>homeplate</name>
+    <truncated>0</truncated>
+    <occluded>0</occluded>
+    <difficult>0</difficult>
+    <bndbox>
+      <xmin>233.3</xmin>
+      <ymin>164.13</ymin>
+      <xmax>372.36</xmax>
+      <ymax>219.86</ymax>
+    </bndbox>
+    <attributes>
+      <attribute>
+        <name>rotation</name>
+        <value>0.0</value>
+      </attribute>
+    </attributes>
+  </object>
+</annotation>
