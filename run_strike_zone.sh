@@ -13,5 +13,5 @@ OUTPUT="rtp://chris-lin-xps15:8554"
 #EXEC_BIN="/jetson-inference/build/aarch64/bin/posenet"
 EXEC_BIN="./strike_zone.py"
 
-${EXEC_BIN} "${INPUT}" "${OUTPUT}"
+${EXEC_BIN} --headless "${INPUT}" "${OUTPUT}"
 

@@ -24,10 +24,10 @@
 import sys
 import argparse
 import time
-
+from enum import Enum
 
 from jetson_inference import poseNet, detectNet
-from jetson_utils import videoSource, videoOutput, Log, cudaDrawRect, cudaDrawLine
+from jetson_utils import videoSource, videoOutput, Log, cudaDrawRect, cudaDrawLine, cudaDrawCircle
 
 
 # Red, Green, Blue, Alpha
@@ -35,11 +35,76 @@ ZONE_BOX_COLOR = (157, 225, 157, 100)
 ZONE_LINE_WIDTH = 1
 ZONE_LINE_COLOR = (157, 225, 157, 255)
 
+HOME_PLATE_MARKER_COLOR_VALID = (0, 255, 0 , 100)
+HOME_PLATE_MARKER_COLOR_WARN = (0, 0, 255 , 100)
+HOME_PLATE_MARKER_COLOR_EXPIRED = (255, 0, 0 , 100)
+HOME_PLATE_MARKER_SIZE = 5
+
 MODELS_PATH = "training/models/homeplate"
 
 # how often, in seconds to run homeplate detection
-HOMEPLATE_DETECTION_PERIOD_SEC = 1
+HOME_PLATE_DETECTION_PERIOD_SEC = 1
+HOME_PLATE_AGE_WARN_SEC = 2
+HOME_PLATE_AGE_EXPIRED_SEC = 4
 
+
+class HomePlateDetectAge(Enum):
+    VALID = 1
+    WARN = 2
+    EXPIRED = 3
+
+class HomePlateDetect:
+
+    last_detection_sec = 0
+    detection = None
+    detect_age = HomePlateDetectAge.EXPIRED
+
+    def __init__(self, detect_net):
+        self.detect_net = detect_net  
+
+    def detect(self):
+        # Detect Home Plate
+        current_time_sec = time.time()
+        time_since_last_detection = current_time_sec - self.last_detection_sec
+        if time_since_last_detection >= HOME_PLATE_DETECTION_PERIOD_SEC:
+            # detect objects in the image (with overlay)
+            detections = self.detect_net.Detect(img)
+
+            # print the detections
+            #print("detected {:d} objects in image".format(len(detections)))
+
+            for detection in detections:
+                if detection.ClassID == 1:
+                    print(f"HomePlate Detection: {detection}")
+                    self.detection = detection
+                    self.last_detection_sec = current_time_sec
+                    time_since_last_detection = 0
+                    break
+
+        if time_since_last_detection >= HOME_PLATE_AGE_EXPIRED_SEC:
+            self.detect_age = HomePlateDetectAge.EXPIRED
+        elif time_since_last_detection >= HOME_PLATE_AGE_WARN_SEC:
+            self.detect_age = HomePlateDetectAge.WARN
+        else:
+            self.detect_age = HomePlateDetectAge.VALID
+
+        # print(f"HomePlate Detect Age: {self.detect_age}")
+
+    def draw_markers(self,img):
+        if self.detect_age == HomePlateDetectAge.WARN:
+            color = HOME_PLATE_MARKER_COLOR_WARN
+        elif self.detect_age == HomePlateDetectAge.EXPIRED:
+            color = HOME_PLATE_MARKER_COLOR_EXPIRED
+        else:
+            color = HOME_PLATE_MARKER_COLOR_VALID
+
+        # only draw markers if we have detection points previously
+        if self.detection:
+            cudaDrawCircle(img, (self.detection.Left, self.detection.Bottom), HOME_PLATE_MARKER_SIZE, color)
+            cudaDrawCircle(img, (self.detection.Right, self.detection.Bottom), HOME_PLATE_MARKER_SIZE, color)
+
+    def expired(self):
+        return (self.detect_age == HomePlateDetectAge.EXPIRED)
 
 def left_and_right_keypoint(pose, left_keypoint, right_keypoint):
     # return [(x,y)] of coordinates for keypoints with left and right side.
@@ -80,7 +145,7 @@ def is_in_stance(pose):
         return False
 
 
-def get_zone(pose, homeplate_left, homeplate_right):
+def get_zone(pose, homeplate_detection):
     # return (left, top, right, bottom) tuple strike zone box
 
     # top of zone is midpoint between shoulder_y and hip_y
@@ -110,8 +175,8 @@ def get_zone(pose, homeplate_left, homeplate_right):
     # use lowest knee for bottom of zone
     bottom_zone = max(knees_y)
 
-    right_zone = homeplate_right
-    left_zone = homeplate_left
+    right_zone = homeplate_detection.Right
+    left_zone = homeplate_detection.Left
 
     return (left_zone, top_zone, right_zone, bottom_zone)
 
@@ -124,6 +189,7 @@ def draw_zone(img, zone):
     cudaDrawLine(img, (left,bottom), (right,bottom), ZONE_LINE_COLOR, ZONE_LINE_WIDTH)
     cudaDrawLine(img, (left,top), (left,bottom), ZONE_LINE_COLOR, ZONE_LINE_WIDTH)
     cudaDrawLine(img, (right,top), (right,bottom), ZONE_LINE_COLOR, ZONE_LINE_WIDTH)
+
 
 # parse the command line
 parser = argparse.ArgumentParser(description="Run pose estimation DNN on a video/image stream.",
@@ -156,10 +222,8 @@ print(f">>> sys.argv: {sys.argv}")
 print(f">>> input: {args.input}")
 print(f">>> output: {args.output}")
 
-# time in seconds since last detection is run
-last_detection_sec = 0
-homeplate_left = 0
-homeplate_right = 0
+home_plate = HomePlateDetect(detect_net)
+
 # process frames until EOS or the user exits
 while True:
     # capture the next image
@@ -168,46 +232,32 @@ while True:
     if img is None:  # timeout
         continue
 
-    current_time_sec = time.time()
+    # do the home plate detection
+    home_plate.detect()
 
-    # Detect Home Plate
-    if current_time_sec - last_detection_sec >= HOMEPLATE_DETECTION_PERIOD_SEC:
-        # detect objects in the image (with overlay)
-        detections = detect_net.Detect(img)
-
-        # print the detections
-        #print("detected {:d} objects in image".format(len(detections)))
-
-        for detection in detections:
-            #print(f"detection: {detection}")
-            if detection.ClassID == 1:
-                homeplate_left = detection.Left
-                homeplate_right = detection.Right
-                last_detection_sec = current_time_sec
-                break
-
-
-    # Detect and Draw strike zon
-    if homeplate_left > 0 and homeplate_right > 0:
+    # Detect and Draw strike zone if home_plate is detected
+    if not home_plate.expired():
         # perform pose estimation (with overlay)
         poses = pose_net.Process(img, overlay="links,keypoints")
 
         # print the pose results
-        print("detected {:d} objects in image".format(len(poses)))
+        # print("PoseNet detected {:d} objects in image".format(len(poses)))
 
         for pose in poses:
-            print(pose)
-            print(pose.Keypoints)
-            print('Links', pose.Links)
+            # print(pose)
+            # print(pose.Keypoints)
+            # print('Links', pose.Links)
 
             if (is_in_stance(pose)):
-                zone = get_zone(pose, homeplate_left, homeplate_right)
+                zone = get_zone(pose, home_plate.detection)
                 if zone:
                     draw_zone(img, zone)
                 else:
                     print('No Strike Zone')
             else:
                 print('Not in stance!')
+            
+    home_plate.draw_markers(img)
 
     # render the image
     output.Render(img)
