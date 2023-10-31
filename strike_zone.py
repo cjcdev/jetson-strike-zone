@@ -30,34 +30,37 @@ from jetson_inference import poseNet, detectNet
 from jetson_utils import videoSource, videoOutput, Log, cudaDrawRect, cudaDrawLine, cudaDrawCircle
 
 
-# Red, Green, Blue, Alpha
-ZONE_BOX_COLOR = (157, 225, 157, 100)
-ZONE_LINE_WIDTH = 1
-ZONE_LINE_COLOR = (157, 225, 157, 255)
+MODELS_PATH = "training/models/homeplate"
+
+# Colors: Red, Green, Blue, Alpha
+STRIKE_ZONE_BOX_COLOR = (157, 225, 157, 100)
+STRIKE_ZONE_LINE_WIDTH = 1
+STRIKE_ZONE_LINE_COLOR = (157, 225, 157, 255)
 
 HOME_PLATE_MARKER_COLOR_VALID = (0, 255, 0 , 100)
 HOME_PLATE_MARKER_COLOR_WARN = (0, 0, 255 , 100)
 HOME_PLATE_MARKER_COLOR_EXPIRED = (255, 0, 0 , 100)
 HOME_PLATE_MARKER_SIZE = 5
 
-MODELS_PATH = "training/models/homeplate"
-
-# how often, in seconds to run homeplate detection
+# how often, in seconds to run home_plate detection
 HOME_PLATE_DETECTION_PERIOD_SEC = 1
-HOME_PLATE_AGE_WARN_SEC = 2
-HOME_PLATE_AGE_EXPIRED_SEC = 4
+# time when home plate detection is about to expire (warn) and expired
+HOME_PLATE_STATE_WARN_TIMEOUT_SEC = 2
+HOME_PLATE_STATE_EXPIRED_TIMEOUT_SEC = 4
 
-
-class HomePlateDetectAge(Enum):
+# state of home plate detection (how current is the home plate data)
+class HomePlateDetectState(Enum):
     VALID = 1
     WARN = 2
     EXPIRED = 3
 
 class HomePlateDetect:
-
+    """
+    HomePlateDetect object handles the detection of the home plate using detectNet
+    """
     last_detection_sec = 0
     detection = None
-    detect_age = HomePlateDetectAge.EXPIRED
+    detect_state = HomePlateDetectState.EXPIRED
 
     def __init__(self, detect_net):
         self.detect_net = detect_net  
@@ -81,118 +84,151 @@ class HomePlateDetect:
                     time_since_last_detection = 0
                     break
 
-        if time_since_last_detection >= HOME_PLATE_AGE_EXPIRED_SEC:
-            self.detect_age = HomePlateDetectAge.EXPIRED
-        elif time_since_last_detection >= HOME_PLATE_AGE_WARN_SEC:
-            self.detect_age = HomePlateDetectAge.WARN
+        if time_since_last_detection >= HOME_PLATE_STATE_EXPIRED_TIMEOUT_SEC:
+            self.detect_state = HomePlateDetectState.EXPIRED
+        elif time_since_last_detection >= HOME_PLATE_STATE_WARN_TIMEOUT_SEC:
+            self.detect_state = HomePlateDetectState.WARN
         else:
-            self.detect_age = HomePlateDetectAge.VALID
+            self.detect_state = HomePlateDetectState.VALID
 
         # print(f"HomePlate Detect Age: {self.detect_age}")
 
     def draw_markers(self,img):
-        if self.detect_age == HomePlateDetectAge.WARN:
+        if self.detect_state == HomePlateDetectState.WARN:
             color = HOME_PLATE_MARKER_COLOR_WARN
-        elif self.detect_age == HomePlateDetectAge.EXPIRED:
+        elif self.detect_state == HomePlateDetectState.EXPIRED:
             color = HOME_PLATE_MARKER_COLOR_EXPIRED
         else:
             color = HOME_PLATE_MARKER_COLOR_VALID
 
-        # only draw markers if we have detection points previously
+        # only draw markers if we have detection points previously (two dots on left and right of plate)
         if self.detection:
             cudaDrawCircle(img, (self.detection.Left, self.detection.Bottom), HOME_PLATE_MARKER_SIZE, color)
             cudaDrawCircle(img, (self.detection.Right, self.detection.Bottom), HOME_PLATE_MARKER_SIZE, color)
 
     def expired(self):
-        return (self.detect_age == HomePlateDetectAge.EXPIRED)
+        return (self.detect_state == HomePlateDetectState.EXPIRED)
 
-def left_and_right_keypoint(pose, left_keypoint, right_keypoint):
-    # return [(x,y)] of coordinates for keypoints with left and right side.
-    # Note: List may be of length 0, 1 or 2.
+class BatterDetect:
+    """
+    BatterDetect handles detecting a batter's top and bottom strike zone using poseNet
+    """
+    def __init__(self, pose_net):
+        self.pose_net = pose_net
 
-    xy = []
+    def process(self):
+        # perform pose estimation (with overlay)
+        poses = pose_net.Process(img, overlay="links,keypoints")
 
-    left_idx = pose.FindKeypoint(left_keypoint)
-    right_idx = pose.FindKeypoint(right_keypoint)
+        # print the pose results
+        # print("PoseNet detected {:d} objects in image".format(len(poses)))
 
-    if left_idx > 0:
-        xy.append((pose.Keypoints[left_idx].x, pose.Keypoints[left_idx].y))
+        for pose in poses:
+            # print(pose)
 
-    if right_idx > 0:
-        xy.append((pose.Keypoints[right_idx].x, pose.Keypoints[right_idx].y))
+            if (self.is_in_stance(pose)):
+                zone = self.get_zone_top_bottom(pose)
+                return zone
+            else:
+                print('Not in stance!')
 
-    return xy
+            # only look at first pose
+            break
 
+        return ()
 
-def is_in_stance(pose):
-    elbows = left_and_right_keypoint(pose, 'left_elbow', 'right_elbow')
-    wrists = left_and_right_keypoint(pose, 'left_wrist', 'right_wrist')
+    def left_and_right_keypoint(self, pose, left_keypoint, right_keypoint):
+        """
+        Create a list of the x,y coordinates for a left keypoint if found and right keypoint if found.
+        For example, use left shoulder and right shoulder.  Return list of coordinates of the shoulders.  
+        This list could be of length 0, 1 or 2, depending on how many keypots are visible.
 
-    # Need to have at least 1 elbow and wrist, otherwise not in stance
-    if len(elbows) == 0 or len(wrists) == 0:
-        print(f"len elbows: {len(elbows)}. len wrists: {len(wrists)}")
-        return False
+        pose: object from poseNet
+        left_keypoint: the left keypoint label to look for pose
+        right_keypoint: the right keypoint label to look for in the pose
 
-    # unpack into list of y coordinates
-    _, wrists_y = zip(*wrists)
-    _, elbows_y = zip(*elbows)
+        return: [(x,y)] of all coordinates found for left and right keypoints.
+        """
+        xy = []
 
-    print(f"wrists_y: {wrists_y}.elbows_y: {elbows_y}")
-    # use lowest wrist and highest elbow
-    if max(wrists_y) < min(elbows_y):
-        return True
-    else:
-        return False
+        left_idx = pose.FindKeypoint(left_keypoint)
+        right_idx = pose.FindKeypoint(right_keypoint)
 
+        if left_idx > 0:
+            xy.append((pose.Keypoints[left_idx].x, pose.Keypoints[left_idx].y))
 
-def get_zone(pose, homeplate_detection):
-    # return (left, top, right, bottom) tuple strike zone box
+        if right_idx > 0:
+            xy.append((pose.Keypoints[right_idx].x, pose.Keypoints[right_idx].y))
 
-    # top of zone is midpoint between shoulder_y and hip_y
-    # bottom of zone is knees_y
-    # left zone is left of home plate
-    # right zone is right of home plate
+        return xy
 
-    shoulders = left_and_right_keypoint(
-        pose, 'left_shoulder', 'right_shoulder')
-    hips = left_and_right_keypoint(pose, 'left_hip', 'right_hip')
-    knees = left_and_right_keypoint(pose, 'left_knee', 'right_knee')
+    def is_in_stance(self, pose):
+        elbows = self.left_and_right_keypoint(pose, 'left_elbow', 'right_elbow')
+        wrists = self.left_and_right_keypoint(pose, 'left_wrist', 'right_wrist')
 
-    # Need to have at least 1 shoulder, hip and knee, otherwise
-    if len(shoulders) == 0 or len(hips) == 0 or len(knees) == 0:
-        return None
+        # Need to have at least 1 elbow and wrist, otherwise not in stance
+        if len(elbows) == 0 or len(wrists) == 0:
+            print(f"Not enough keypoints: len elbows: {len(elbows)}. len wrists: {len(wrists)}")
+            return False
 
-    # unpack into list of y coordinates
-    _, shoulders_y = zip(*shoulders)
-    _, hips_y = zip(*hips)
-    knees_x, knees_y = zip(*knees)
+        # unpack into list of y coordinates
+        _, wrists_y = zip(*wrists)
+        _, elbows_y = zip(*elbows)
 
-    # we will create a taller zone by choosing the top most shoulder and bottom most hip
-    shoulder_y = min(shoulders_y)
-    hips_y = max(hips_y)
-    top_zone = ((hips_y - shoulder_y)) / 2 + shoulder_y
+        # use lowest wrist and highest elbow
+        if max(wrists_y) < min(elbows_y):
+            return True
+        else:
+            return False
 
-    # use lowest knee for bottom of zone
-    bottom_zone = max(knees_y)
+    def get_zone_top_bottom(self, pose):
+        """
+        Find the top and bottom of the zone based on the body pose.
 
-    right_zone = homeplate_detection.Right
-    left_zone = homeplate_detection.Left
+        top of zone is midpoint between shoulder_y and hip_y
+        bottom of zone is knees_y
 
-    return (left_zone, top_zone, right_zone, bottom_zone)
+        return (top, bottom) tuple or  empty ()
+        """
 
-def draw_zone(img, zone): 
-    (left, top, right, bottom) = zone
+        shoulders = self.left_and_right_keypoint(
+            pose, 'left_shoulder', 'right_shoulder')
+        hips = self.left_and_right_keypoint(pose, 'left_hip', 'right_hip')
+        knees = self.left_and_right_keypoint(pose, 'left_knee', 'right_knee')
 
-    cudaDrawRect(img, zone, ZONE_BOX_COLOR)
+        # Need to have at least 1 shoulder, hip and knee, otherwise
+        if len(shoulders) == 0 or len(hips) == 0 or len(knees) == 0:
+            return ()
 
-    cudaDrawLine(img, (left,top), (right,top), ZONE_LINE_COLOR, ZONE_LINE_WIDTH)
-    cudaDrawLine(img, (left,bottom), (right,bottom), ZONE_LINE_COLOR, ZONE_LINE_WIDTH)
-    cudaDrawLine(img, (left,top), (left,bottom), ZONE_LINE_COLOR, ZONE_LINE_WIDTH)
-    cudaDrawLine(img, (right,top), (right,bottom), ZONE_LINE_COLOR, ZONE_LINE_WIDTH)
+        # unpack into list of y coordinates
+        _, shoulders_y = zip(*shoulders)
+        _, hips_y = zip(*hips)
+        _, knees_y = zip(*knees)
+
+        # we will create a taller zone by choosing the top most shoulder and bottom most hip
+        shoulder_y = min(shoulders_y)
+        hips_y = max(hips_y)
+        top_zone = ((hips_y - shoulder_y)) / 2 + shoulder_y
+
+        # use lowest knee for bottom of zone
+        bottom_zone = max(knees_y)
+
+        return (top_zone, bottom_zone)
+
+def draw_strike_zone(img, left, top, right, bottom):
+    """
+    Draw the strike zone on the img.
+    """
+    cudaDrawRect(img, (left, top, right, bottom), STRIKE_ZONE_BOX_COLOR)
+
+    cudaDrawLine(img, (left,top), (right,top), STRIKE_ZONE_LINE_COLOR, STRIKE_ZONE_LINE_WIDTH)
+    cudaDrawLine(img, (left,bottom), (right,bottom), STRIKE_ZONE_LINE_COLOR, STRIKE_ZONE_LINE_WIDTH)
+    cudaDrawLine(img, (left,top), (left,bottom), STRIKE_ZONE_LINE_COLOR, STRIKE_ZONE_LINE_WIDTH)
+    cudaDrawLine(img, (right,top), (right,bottom), STRIKE_ZONE_LINE_COLOR, STRIKE_ZONE_LINE_WIDTH)
 
 
 # parse the command line
-parser = argparse.ArgumentParser(description="Run pose estimation DNN on a video/image stream.",
+parser = argparse.ArgumentParser(description="Run strike zone detection for a batter.",
                                  formatter_class=argparse.RawTextHelpFormatter,
                                  epilog=poseNet.Usage() + videoSource.Usage() + videoOutput.Usage() + Log.Usage())
 
@@ -218,11 +254,8 @@ detect_net =  detectNet(model=f"{MODELS_PATH}/ssd-mobilenet.onnx", labels=f"{MOD
 input = videoSource(args.input, argv=sys.argv)
 output = videoOutput(args.output, argv=sys.argv)
 
-print(f">>> sys.argv: {sys.argv}")
-print(f">>> input: {args.input}")
-print(f">>> output: {args.output}")
-
 home_plate = HomePlateDetect(detect_net)
+batter = BatterDetect(pose_net)
 
 # process frames until EOS or the user exits
 while True:
@@ -237,26 +270,13 @@ while True:
 
     # Detect and Draw strike zone if home_plate is detected
     if not home_plate.expired():
-        # perform pose estimation (with overlay)
-        poses = pose_net.Process(img, overlay="links,keypoints")
 
-        # print the pose results
-        # print("PoseNet detected {:d} objects in image".format(len(poses)))
+        zone_height = batter.process()
+        if zone_height:
+            draw_strike_zone(img = img, left = home_plate.detection.Left, top = zone_height[0], 
+                      right = home_plate.detection.Right, bottom = zone_height[1])
 
-        for pose in poses:
-            # print(pose)
-            # print(pose.Keypoints)
-            # print('Links', pose.Links)
-
-            if (is_in_stance(pose)):
-                zone = get_zone(pose, home_plate.detection)
-                if zone:
-                    draw_zone(img, zone)
-                else:
-                    print('No Strike Zone')
-            else:
-                print('Not in stance!')
-            
+    # always draw home plat markers
     home_plate.draw_markers(img)
 
     # render the image
