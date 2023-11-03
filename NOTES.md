@@ -3,6 +3,7 @@
 
 - Starting Docker
 ```
+cd jetson-inference
 ./docker/run.sh -v /home/chris/jetson-strike-zone/:/jetson-inference/jetson-strike-zone
 ```
 
