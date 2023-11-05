@@ -1,2 +1,109 @@
-# jetson-strike-zone
-Nvidia Jetson Nano - Strike Zone Project
+# NVIDIA Jetson Nano - Strike Zone Project
+The Strike Zone project uses an Nvidia Jetson and the jetson-inference librararies to draw a baseball strike zone on a video stream.
+
+
+> The official strike zone for Major League Baseball is the area over home plate from the midpoint between a batter's shoulders and the top of the uniform pants -- when the batter is in his stance and prepared to swing at a pitched ball.
+
+## Requirements:
+- NVIDIA Jetson Nano HW
+- [jetson-inference](https://github.com/dusty-nv/jetson-inference) library
+- A camera (or images/videos)
+- A printed to scale [home plate template](https://github.com/cjcdev/jetson-strike-zone/blob/main/homeplate.pdf)
+
+## How it works
+- The pre-trained object detection mobilenet-v1-ssd model is the basis to build a model that will detect home plate.  Transfer learning was done with 150+ images of home plate to allow detecting the home plate.  The left and right coordinates of the detected bounding box is used as the left and right side of the strike zone. [HomePlateDetect.detect()]
+- The pre-trained resnet18-body model is used to detect the batter's body keypoints.  The midpoint between the top most shoulder and bottom most hip keypoint is used as the top of the strike zone.  And the lowest knee position is used for the bottom of the strike zone. [BatterDetect.get_zone_top_bottom()]
+- To help reduce system load, the home plate detection is only done once a second.  Two dots are drawn on the output stream to indicate the left/right position of home plate.  [HomePlateDetect.draw_markers()] The dots can be green, blue or red:
+    - Green - points were detected less than 2 seconds ago
+    - Blue - points were detected  more than 2 seconds ago
+    - Red - points were detected more than 4 seconds ago
+- The strike zone is only drawn in the following conditions:
+    - A home plate has been detected in the last 4 seconds, [HomePlateDetect.expired()]
+    - A body with at least 1 shoulder keypoint, 1 hip keypoint and 1 knee keypoint is detected. [BatterDetect.get_zone_top_bottom()]
+    - A batter is in a batting stance is detected.  Batting stance is defined as the wrist keypoints being higher than the elbow keypoints. [BatterDetect.is_in_stance()]
+
+<br>
+<center><img src="stance-text.gif" width="45%"/> &nbsp; &nbsp; &nbsp; &nbsp;
+<img src="strike_zone-text.gif" width="45%"/> </center>
+
+
+## Setup
+There are a few steps required to get the project up and running.
+
+### Jetson Setup
+1. Checkout the [jetson-inference](https://github.com/dusty-nv/jetson-inference) repo and follow the [System Setup](https://github.com/dusty-nv/jetson-inference#system-setup) instructions.
+2. Clone this repo next to the jetson-inference code, in the home directory.
+    ```
+    cd
+    git clone https://github.com/cjcdev/jetson-strike-zone.git
+    ```
+3. Start the docker container with the jetson-strike-zone repo mounted as a volume:
+    ```
+    cd ~/jetson-inference
+    ./docker/run.sh -v ~/jetson-strike-zone/:/jetson-inference/jetson-strike-zone
+    ```
+
+### Print Home Plate PDF
+The `homeplate.pdf` document is an image of a large baseball home plate. To print the document over several pages:
+1. Open the PDF in Adobe Acrobat and select Print
+2. In the print dialog box, under Page Sizing & Handling, select **Poster**.
+3. 6 pages should be printed out. Cut the pages, keeping the black border around the home plate.
+4. Assemble the pieces together and attach with tape.
+
+### VOC Dataset Labeling
+The CVAT tool is used to label the home plate images dataset in VOC format. To install the cvat service and create a user account:
+```
+git clone https://github.com/opencv/cvat
+cd cvat
+docker compose up -d
+docker exec -it cvat_server bash -ic 'python3 ~/manage.py createsuperuser'
+```
+
+login to https://localhost:8080
+
+
+The `tranning/data/homeplate-voc` directory in this repository has the VOC labeled dataset that was collected and exported using CVAT. If you are creating your own dataset, a couple of additional steps need to be done to the CVAT exported data:
+1. Create a labels.txt file in `homeplate-voc` that has a single line of text with the label `homeplate`.
+    ```
+    cd /jetson-interence/jetson-strike-zone/training/data
+    echo "homeplate" > homeplate-voc/lables.txt
+    ```
+2. The exported `ImageSets/Main` will contain a `defaults.txt` file with all the image names.  We need to create the necessary test.txt, train.txt, trainval.txt and val.txt.  There is a helper script named `gen_image_set.sh` that will randomly sort all the names in defaults.txt and assign them to 80% Train, 10% Val and 10% Test.
+    ```
+    cd /jetson-interence/jetson-strike-zone/training/data
+    ./gen_image_set.sh homeplate-voc
+    ```
+
+## Training
+The home plate object detection required using transfer learning on the mobilenet-v1-ssd model with pictures of the homeplate template at different angles and locations.
+
+The model was generated by training the 144 Image dataset over 200 epochs.  The command to do the training is:
+```
+cd /jetson-interence/jetson-strike-zone/training
+
+python3 /jetson-inference/python/training/detection/ssd/train_ssd.py \
+    --dataset-type=voc --data=data/homeplate-voc \
+    --model-dir=models/homeplate \
+    --batch-size=2 --workers=1 --epoch=200
+```
+
+Export onnx model:
+```
+cd /jetson-interence/jetson-strike-zone/training
+
+python3 /jetson-inference/python/training/detection/ssd/onnx_export.py \
+    --model-dir=models/homeplate
+```
+
+The final model can be found at
+`/jetson-interence/jetson-strike-zone/training/models/homeplate/ssd-mobilenet.onnx`.
+
+## Inference
+The `/jetson-interence/jetson-strike-zone/strike_zone.py` is the inference code that draws a strike zone on an input stream.
+
+1. Edit `/jetson-interence/jetson-strike-zone/run_strike_zone.sh` with the INPUT and OUTPUT variables for your system (same arguments as jetson-inference tools).
+2. Run inference:
+    ```
+    /jetson-interence/jetson-strike-zone/
+    ./run_strik_zone.sh
+    ```
