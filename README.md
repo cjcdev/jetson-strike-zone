@@ -22,9 +22,10 @@ The Strike Zone project uses an Nvidia Jetson and the jetson-inference librarari
     - A body with at least 1 shoulder keypoint, 1 hip keypoint and 1 knee keypoint is detected. [BatterDetect.get_zone_top_bottom()]
     - A batter is in a batting stance is detected.  Batting stance is defined as the wrist keypoints being higher than the elbow keypoints. [BatterDetect.is_in_stance()]
 
-<br>
-<center><img src="stance-text.gif" width="45%"/> &nbsp; &nbsp; &nbsp; &nbsp;
-<img src="strike_zone-text.gif" width="45%"/> </center>
+&nbsp; &nbsp; &nbsp; &nbsp;
+<center><img src="stance-text.gif" width="45%"/></center> 
+&nbsp; &nbsp; &nbsp; &nbsp;
+<center> <img src="strike_zone-text.gif" width="45%"/> </center>
 
 
 ## Setup
