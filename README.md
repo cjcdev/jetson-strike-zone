@@ -23,9 +23,9 @@ The Strike Zone project uses an Nvidia Jetson and the jetson-inference librarari
     - A batter is in a batting stance is detected.  Batting stance is defined as the wrist keypoints being higher than the elbow keypoints. [BatterDetect.is_in_stance()]
 
 &nbsp; &nbsp; &nbsp; &nbsp;
-<center><img src="stance-text.gif" width="45%"/></center> 
+<p align="center"><img src="stance.gif" width="65%"/></p>
 &nbsp; &nbsp; &nbsp; &nbsp;
-<center> <img src="strike_zone-text.gif" width="45%"/> </center>
+<p align="center"><img src="strike_zone.gif" width="65%"/></p>
 
 
 ## Setup
