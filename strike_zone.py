@@ -71,7 +71,7 @@ class HomePlateDetect:
         time_since_last_detection = current_time_sec - self.last_detection_sec
         if time_since_last_detection >= HOME_PLATE_DETECTION_PERIOD_SEC:
             # detect objects in the image (with overlay)
-            detections = self.detect_net.Detect(img)
+            detections = self.detect_net.Detect(img, overlay='none')
 
             # print the detections
             #print("detected {:d} objects in image".format(len(detections)))
@@ -118,7 +118,7 @@ class BatterDetect:
 
     def process(self):
         # perform pose estimation (with overlay)
-        poses = pose_net.Process(img, overlay="links,keypoints")
+        poses = pose_net.Process(img, overlay="keypoints")
 
         # print the pose results
         # print("PoseNet detected {:d} objects in image".format(len(poses)))
@@ -130,7 +130,8 @@ class BatterDetect:
                 zone = self.get_zone_top_bottom(pose)
                 return zone
             else:
-                print('Not in stance!')
+                ()
+                # print('Not in stance!')
 
             # only look at first pose
             break
@@ -168,7 +169,7 @@ class BatterDetect:
 
         # Need to have at least 1 elbow and wrist, otherwise not in stance
         if len(elbows) == 0 or len(wrists) == 0:
-            print(f"Not enough keypoints: len elbows: {len(elbows)}. len wrists: {len(wrists)}")
+            # print(f"Not enough keypoints: len elbows: {len(elbows)}. len wrists: {len(wrists)}")
             return False
 
         # unpack into list of y coordinates
@@ -246,8 +247,8 @@ except:
 
 # load the pose estimation model
 pose_net = poseNet(network="resnet18-body", threshold=0.15)
-detect_net =  detectNet(model=f"{MODELS_PATH}/ssd-mobilenet.onnx", labels=f"{MODELS_PATH}/labels.txt", 
-                 input_blob="input_0", output_cvg="scores", output_bbox="boxes", 
+detect_net =  detectNet(model=f"{MODELS_PATH}/ssd-mobilenet.onnx", labels=f"{MODELS_PATH}/labels.txt",
+                 input_blob="input_0", output_cvg="scores", output_bbox="boxes",
                  threshold=0.3)
 
 # create video sources & outputs
