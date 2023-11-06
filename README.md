@@ -2,7 +2,7 @@
 The Strike Zone project uses an Nvidia Jetson and the jetson-inference librararies to draw a baseball strike zone on a video stream.
 
 
-> The official strike zone for Major League Baseball is the area over home plate from the midpoint between a batter's shoulders and the top of the uniform pants -- when the batter is in his stance and prepared to swing at a pitched ball.
+> The official strike zone for Major League Baseball is the area over home plate from the midpoint between a batter's shoulders and the top of the uniform pants -- when the batter is in his stance and prepared to swing at a pitched ball -- and a point just below the kneecap.
 
 ## Requirements:
 - NVIDIA Jetson Nano HW
